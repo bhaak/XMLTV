@@ -137,7 +137,7 @@ sub grab_channel($);
 
 ## attributes of xmltv root element
 my $head = { 
-    'source-data-url'      => 'http://tv.classic.search.ch/channels.de.html',
+    'source-data-url'      => 'http://tv.search.ch/channels',
     'source-info-url'      => 'http://tv.classic.search.ch/index.de.html',
     'generator-info-name'  => 'XMLTV',
     'generator-info-url'   => 'http://xmltv.org/',
@@ -584,35 +584,19 @@ sub get_channels() {
 
     my $tb=new HTML::TreeBuilder();
     $tb->parse(get_page($url))
-	  or die "cannot parse content of $url";    
+        or die "cannot parse content of $url";
     $tb->eof;
 
-	## getting the channels directly selectable
-	foreach($tb->look_down('_tag' => 'span', 'style' => 'float:right;display:inline' )) {
-        next unless(ref($_) eq "HTML::Element");
+    ## getting the channels directly selectable
+    foreach($tb->look_down('_tag' => 'label')) {
+        my $id = ($_->look_down('_tag' => 'input'))->id; # tv-channel-sf1
+        next unless(substr($id, 0, 10) eq "tv-channel");
         my $channel_name = $_->as_text();
-	my $id = (((($_->look_up('_tag' => 'div'))[0])->look_down('_tag' => 'input', 'type' => 'checkbox'))[0])->attr('value');
 
-        $channels{uri_escape($id)} = $channel_name;      
+        $channels{uri_escape(substr($id, 11))} = $channel_name;
     }
     $tb->delete;
 
-    # adding the sky-channels manually... why do these sites _NEVER_ stick to their own design?
-    $channels{uri_escape("skyaction")} = "SKY ACTION";
-    $channels{uri_escape("skycinema")} = "SKY CINEMA";
-    $channels{uri_escape("skycinema1")} = "SKY CINEMA +1";
-    $channels{uri_escape("skycinema24")} = "SKY CINEMA +24";
-    $channels{uri_escape("skycinemahits")} = "SKY CINEMA HITS";
-    $channels{uri_escape("skycomedy")} = "SKY COMEDY";
-    $channels{uri_escape("skyemotion")} = "SKY EMOTION";
-    $channels{uri_escape("skyfussballbundesliga")} = "Sky Fussball Bundesliga";
-    $channels{uri_escape("skykrimi")} = "SKY KRIMI";
-    $channels{uri_escape("skynostalgie")} = "SKY NOSTALGIE";
-    $channels{uri_escape("skyselect")} = "Sky Select";
-    $channels{uri_escape("skysport1")} = "Sky Sport 1";
-    $channels{uri_escape("skysport2")} = "Sky Sport 2";
-    $channels{uri_escape("skysportaustria")} = "SKY SPORT AUSTRIA";
-    $channels{uri_escape("skysporthd")} = "SKY SPORT HD"; 
     return %channels;
 }
 
