@@ -94,6 +94,7 @@ use Getopt::Long;
 use HTML::TreeBuilder;
 use HTML::Entities;
 use URI::Escape;
+use URI::URL;
 use XMLTV;
 use XMLTV::Ask;
 use XMLTV::ProgressBar;
@@ -138,7 +139,7 @@ sub grab_channel($);
 ## attributes of xmltv root element
 my $head = { 
     'source-data-url'      => 'http://tv.search.ch/channels',
-    'source-info-url'      => 'http://tv.classic.search.ch/index.de.html',
+    'source-info-url'      => 'http://tv.search.ch/',
     'generator-info-name'  => 'XMLTV',
     'generator-info-url'   => 'http://xmltv.org/',
 };
@@ -392,30 +393,55 @@ sub grab_channels
   my $req = HTTP::Request->new(GET => "$url?time=$loop_date+" . 4*$count .".00");
   $req->header('Accept' => 'text/html');
     
+  $tb->ignore_unknown(0); # otherwise, html5 tags like section are stripped out
   $tb->parse(($ua->request($req))->content)
       or die "cannot parse content of http://tv.search.ch/?time=$loop_date+" . 4*$count .".00"; ;    
   $tb->eof;
 
-  foreach my $tv_channel ( $tb->look_down('_tag' => 'div', 'class' => 'tv_channel') )
+  foreach my $tv_channel ( $tb->look_down('class' => 'sl-card tv-index-channel') )
   {
-   my $channel_id = $tv_channel->attr('id');
+   my $channel_id = substr($tv_channel->attr('id'), 3); # tv-sf1 -> sf1
    if ( defined($channel_id) )
    {
-    foreach my $tv_show ( $tv_channel ->look_down('_tag' => 'tr', sub { ($_[0]->as_HTML() =~ m{tv_b_}) && !($_[0]->as_HTML() =~ m{tv_before})  && !($_[0]->as_HTML() =~ m{tv_timegroup}) } ) )
+    foreach my $tv_show ( $tv_channel ->look_down('class' => 'tv-tooltip') )
     {
      my %show;
      $show{channel} = channel_id($channel_id);
-     
-     my $tmp = (($tv_show->look_down('_tag', 'td'))[0])->as_text();
+
+     my $tmp = $tv_show->look_down('_tag', 'a');
+     next unless defined($tmp);
+
+     my %params = URI::URL->new($tmp->attr('href'))->query_form();
+     my $start_date = $params{'start'};
+     my $end_date = $params{'end'};
+     next unless defined($start_date);
+
      $show{start} = DateTime->new (
-        year => $grabDate->year()
-       ,month => $grabDate->month() 
-       ,day   => $grabDate->day()
-       ,hour  => substr($tmp,0,2) 
-       ,minute => substr($tmp,3,2)
-       ,second => 00
+        year => substr($start_date, 0, 4)
+       ,month => substr($start_date, 5, 2)
+       ,day   => substr($start_date, 8, 2)
+       ,hour  => substr($start_date, 11, 2)
+       ,minute => substr($start_date, 14, 2)
+       ,second => substr($start_date, 17, 2)
        ,time_zone => 'Europe/Zurich'
       )->strftime( "%Y%m%d%H%M%S %z" );
+
+     $show{stop} = DateTime->new (
+        year => substr($end_date, 0, 4)
+       ,month => substr($end_date, 5, 2)
+       ,day   => substr($end_date, 8, 2)
+       ,hour  => substr($end_date, 11, 2)
+       ,minute => substr($end_date, 14, 2)
+       ,second => substr($end_date, 17, 2)
+       ,time_zone => 'Europe/Zurich'
+      )->strftime( "%Y%m%d%H%M%S %z" );
+
+      my $title_tag = $tv_show->look_down('_tag' => 'h2');
+      $title_tag->objectify_text();
+      my $title = $title_tag->look_down('_tag', '~text')->attr('text');
+      $show{'title'} = [[$title, $lang]];
+      my $sub_title = $tv_show->look_down('_tag' => 'h3');
+      $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
 
      $tmp  = $tv_show->as_HTML();
      if ( $tmp =~ /Untertitel für Gehörlose/)
