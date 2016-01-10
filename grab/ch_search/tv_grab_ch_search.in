@@ -328,7 +328,7 @@ foreach(@requests) {
     my %channel = ('id'           => $id, 
                    'display-name' => [[$channels{$_}, $lang]]); 
     $writer->write_channel(\%channel);
-     $paramstr = $paramstr."&channel[]=".$_; 
+    $paramstr = $paramstr."&channels[]=".$_;
 
 }
 
