@@ -374,232 +374,175 @@ sub channel_id($) {
     return "$s.search.ch"
 }
 
+sub parse_page {
+    my ($tb) = @_;
+    foreach my $tv_channel ( $tb->look_down('class' => 'sl-card tv-index-channel') ) {
+        my $channel_id = substr($tv_channel->attr('id'), 3); # tv-sf1 -> sf1
+        if ( defined($channel_id) ) {
+            foreach my $tv_show ( $tv_channel ->look_down('class' => 'tv-tooltip') ) {
+                my %show;
+                $show{channel} = channel_id($channel_id);
 
+                my $tmp = $tv_show->look_down('_tag', 'a');
+                next unless defined($tmp);
 
-sub grab_channels
-{
- my $grabDate = $grab_start;
- my $url = $head->{q(source-info-url)};
- 
- $bar = new XMLTV::ProgressBar('grabbing channels       ', (6*$opt_days))
-  if not $opt_quiet;
+                my %params = URI::URL->new($tmp->attr('href'))->query_form();
+                my $start_date = $params{'start'};
+                my $end_date = $params{'end'};
+                next unless defined($start_date);
 
- grab_channel_loop:
- for (my $count = 0; $count < 6; $count++) 
- {
-  my $tb = HTML::TreeBuilder->new();
+                $show{start} = DateTime->new (
+                    year => substr($start_date, 0, 4)
+                    ,month => substr($start_date, 5, 2)
+                    ,day   => substr($start_date, 8, 2)
+                    ,hour  => substr($start_date, 11, 2)
+                    ,minute => substr($start_date, 14, 2)
+                    ,second => substr($start_date, 17, 2)
+                    ,time_zone => 'Europe/Zurich'
+                )->strftime( "%Y%m%d%H%M%S %z" );
 
-  my $loop_date = $grabDate->year() . '-' . substr("0".$grabDate->month(),-2) . '-' . substr("0".$grabDate->day(),-2);
-  my $req = HTTP::Request->new(GET => "$url?time=$loop_date+" . 4*$count .".00");
-  $req->header('Accept' => 'text/html');
-    
-  $tb->ignore_unknown(0); # otherwise, html5 tags like section are stripped out
-  $tb->parse(($ua->request($req))->content)
-      or die "cannot parse content of http://tv.search.ch/?time=$loop_date+" . 4*$count .".00"; ;    
-  $tb->eof;
+                $show{stop} = DateTime->new (
+                    year => substr($end_date, 0, 4)
+                    ,month => substr($end_date, 5, 2)
+                    ,day   => substr($end_date, 8, 2)
+                    ,hour  => substr($end_date, 11, 2)
+                    ,minute => substr($end_date, 14, 2)
+                    ,second => substr($end_date, 17, 2)
+                    ,time_zone => 'Europe/Zurich'
+                )->strftime( "%Y%m%d%H%M%S %z" );
 
-  foreach my $tv_channel ( $tb->look_down('class' => 'sl-card tv-index-channel') )
-  {
-   my $channel_id = substr($tv_channel->attr('id'), 3); # tv-sf1 -> sf1
-   if ( defined($channel_id) )
-   {
-    foreach my $tv_show ( $tv_channel ->look_down('class' => 'tv-tooltip') )
-    {
-     my %show;
-     $show{channel} = channel_id($channel_id);
+                my $title_tag = $tv_show->look_down('_tag' => 'h2');
+                $title_tag->objectify_text();
+                my $title = $title_tag->look_down('_tag', '~text')->attr('text');
+                $show{'title'} = [[$title, $lang]];
 
-     my $tmp = $tv_show->look_down('_tag', 'a');
-     next unless defined($tmp);
+                my $sub_title = $tv_show->look_down('_tag' => 'h3');
+                $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
 
-     my %params = URI::URL->new($tmp->attr('href'))->query_form();
-     my $start_date = $params{'start'};
-     my $end_date = $params{'end'};
-     next unless defined($start_date);
+                # Note: The layout is using dl lists for displaying this data
+                # and only the dt tag is marked with meaningful classes. That's
+                # why $variable->right()-as_text() is employed here to get the
+                # content of the  unmarked dd tag.
 
-     $show{start} = DateTime->new (
-        year => substr($start_date, 0, 4)
-       ,month => substr($start_date, 5, 2)
-       ,day   => substr($start_date, 8, 2)
-       ,hour  => substr($start_date, 11, 2)
-       ,minute => substr($start_date, 14, 2)
-       ,second => substr($start_date, 17, 2)
-       ,time_zone => 'Europe/Zurich'
-      )->strftime( "%Y%m%d%H%M%S %z" );
+                # Beschreibung
+                foreach my $description ($tv_show->look_down('class' => 'tv-detail-description')) {
+                    $show{desc} = [[ $description->right()->as_text(), $lang ]]
+                }
 
-     $show{stop} = DateTime->new (
-        year => substr($end_date, 0, 4)
-       ,month => substr($end_date, 5, 2)
-       ,day   => substr($end_date, 8, 2)
-       ,hour  => substr($end_date, 11, 2)
-       ,minute => substr($end_date, 14, 2)
-       ,second => substr($end_date, 17, 2)
-       ,time_zone => 'Europe/Zurich'
-      )->strftime( "%Y%m%d%H%M%S %z" );
+                # Produktionsjahr
+                foreach my $year ($tv_show->look_down('class' => 'tv-detail-year tv-detail-short')) {
+                    $show{date} = $year->right()->as_text();
+                }
 
-      my $title_tag = $tv_show->look_down('_tag' => 'h2');
-      $title_tag->objectify_text();
-      my $title = $title_tag->look_down('_tag', '~text')->attr('text');
-      $show{'title'} = [[$title, $lang]];
-      my $sub_title = $tv_show->look_down('_tag' => 'h3');
-      $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
+                # Kategorie
+                foreach my $category ($tv_show->look_down('class' => 'tv-detail-catname tv-detail-short')) {
+                    my $s = $category->right()->as_text();
+                    my @categories = split(m/\s*[\/]\s*/, $s);
+                    foreach  (@categories) {
+                        push @{$show{category}}, [$_, $lang ] if ($_)
+                    }
+                }
 
-     $tmp  = $tv_show->as_HTML();
-     if ( $tmp =~ /Untertitel für Gehörlose/)
-     {
-      $show{subtitles} = [{ type => 'teletext' }];
-     }
-     if ( $tmp =~ /Zweikanalton/)
-     {
-      $show{audio}{stereo} = 'bilingual';
-     }
-     if ( $tmp =~ /16:9/)
-     {
-      $show{video}{aspect} = '16:9';
-     }  
-     
-     foreach my $div ( $tv_show->look_down('_tag' => 'div', 
-     		sub {
-     			( defined $_[0]->attr('class') && ( ( $_[0]->attr ('class') eq "tv_tooltip") || ( $_[0]->attr ('class') eq "tv_tr_notooltip" ) ) )
-     		    } )
-     	     )
-     {
-      if ( $div->attr ('class') eq 'tv_tr_notooltip' )
-      {
-             $show{'title'} = [[$div->as_text(), $lang]]; 
-      }
-      else
-      {
-      
-       my $title = (($div->look_down('_tag' => 'td', 'class' => 'title'))->look_down('_tag' => 'h2'))->as_text();
-       my $sub_title = ($div->look_down('_tag' => 'td', 'class' => 'title'))->as_text();
+                # Produktionsinfos
+                foreach my $category ($tv_show->look_down('class' => 'tv-detail-production tv-detail-short')) {
+                    my $s = $category->right()->as_text();
+                    $s=~ s/\(.*//;
+                    my @categories = split(m/\s*[\/,]\s*/, $s);
+                    foreach my $category (@categories) {
+                        if ($category) {
+                            my $is_defined = 0;
+                            foreach ( @{$show{category}} ) {
+                                if ("${$_}[0]" eq "$category" ) {
+                                    $is_defined = 1;
+                                    last;
+                                }
+                            }
+                            push @{$show{category}}, [$category, $lang ] if ($is_defined == 0);
+                        }
+                    }
+                }
 
-       $sub_title =~ s/\Q$title \E//;
-       if ( "$title" eq "$sub_title" )
-       {
-        $sub_title ="";
-       } 
+                # Produktionsland
+                foreach my $country ($tv_show->look_down('class' => 'tv-detail-country tv-detail-short')) {
+                    my @countries = split(m/\s*[\/,]\s*/, $country->right()->as_text());
+                    foreach (@countries) {
+                        push @{$show{country}}, [$_, $lang ];
+                    }
+                }
 
-if($channel_id  =~ /tv_nickch/)
+                # Cast
+                foreach my $cast ($tv_show->look_down('class' => 'tv-detail-cast')) {
+                    my $s = $cast->right()->as_text();
+                    $s=~ s/\(.*//;
+                    my @actors = split(m/\s*,\s*/, $s);
+                    $show{credits}{actor} = \@actors;
+                }
 
-                                {
+                # Regisseur
+                foreach my $directors ($tv_show->look_down('class' => 'tv-detail-director tv-detail-short')) {
+                    my @directors = split(m/\s*,\s*/, $directors->right()->as_text());
+                    $show{credits}{director} = \@directors;
+                }
 
-    $title =~ m/(.*?)([\s](((\d+\D+)|(\d+))))?$/;
+                # Drehbuch
+                foreach my $writers ($tv_show->look_down('class' => 'tv-detail-writer tv-detail-short')) {
+                    my @writers = split(m/\s*,\s*/, $writers->right()->as_text());
+                    $show{credits}{writer} = \@writers;
+                }
 
-               $title = $1;           # only get first group with the title (there is always content in it)
+                # Wiederholung
+                foreach my $previously_shown ($tv_show->look_down('class' => 'tv-detail-repetition')) {
+                    $show{'previously-shown'} = {}
+                }
 
-                # group 3 matches something like "123", "123B", "123BB" (not yet seen, but taken care of), after a title with a space, and could be prepended to sub_title
+                $tmp  = $tv_show->as_HTML();
+                if ($tmp =~ /Untertitel für Gehörlose/) {
+                    $show{subtitles} = [{ type => 'teletext' }];
+                }
+                if ($tmp =~ /Zweikanalton/) {
+                    $show{audio}{stereo} = 'bilingual';
+                }
+                if ($tmp =~ /16:9/) {
+                    $show{video}{aspect} = '16:9';
+                }
 
+                $writer->write_programme(\%show);
+           }
+       }
+   }
 }
 
-       foreach  my $year ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Produktionsjahr<\/th>} } ) )
-       {
-        $show{date} =  (($year->look_down('_tag', 'td'))->as_text());        
-       }
-       
-       foreach  my $category ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Kategorie<\/th>} } ) )
-	   {
-        my $s =  (($category->look_down('_tag', 'td'))->as_text());        
-        my @categories = split(m/\s*[\/]\s*/, $s);
-        foreach ( @categories )
-        {
-         if ( $_ )
-         {
-          push @{$show{category}}, [$_, $lang ];
-         }
-        }
-	   }
-	   
-	   foreach  my $category ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Produktionsinfos<\/th>} } ) )
-       {
-        my $s = (($category->look_down('_tag', 'td'))->as_text());        
-        $s=~ s/\(.*//;
-        my @categories = split(m/\s*[\/,]\s*/, $s);
-        foreach my $category ( @categories )
-        {
-         if ( $category )
-         {
-          my $is_defined = 0;
-		  foreach ( @{$show{category}} )
-		  {
-		    if ("${$_}[0]" eq "$category" )
-		    {
-		     $is_defined = 1;
-		     last;
-		    }
-		  }
-		  if ( $is_defined == 0 )
-		  {
-			push @{$show{category}}, [$category, $lang ];
-		  }		  
-         }
-        }
-       }	   
-       
+sub grab_channels {
+    my $grabDate = $grab_start;
+    my $url = $head->{q(source-info-url)};
 
-	   foreach  my $country ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Produktionsland<\/th>} } ) )
-       {
-        my $s =  (($country->look_down('_tag', 'td'))->as_text());        
-        my @countries = split(m/\s*[\/,]\s*/, $s);
-        foreach ( @countries )
-        {
-		  push @{$show{country}}, [$_, $lang ];         
-        }
-       }
+    $bar = new XMLTV::ProgressBar('grabbing channels       ', (6*$opt_days))
+    if not $opt_quiet;
 
-       my $description =  "";
-       foreach  my $desc ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Beschreibung<\/th>} } ) )
-       {
-        $description = (($desc->look_down('_tag', 'td'))->as_text());
-        $description =~ s/ mehr... / /;
-        $description =~ s/Folge verpasst(.*)voller Länge zum kostenlosen Abruf bereit\.//;
-        
-       }
+    grab_channel_loop:
+    for (my $count = 0; $count < 6; $count++) {
+        my $tb = HTML::TreeBuilder->new();
 
-       foreach  my $cast ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Cast<\/th>} } ) )
-       {
-        my $s = (($cast->look_down('_tag', 'td'))->as_text());        
-        $s=~ s/\(.*//;
-        my @actors = split(m/\s*,\s*/, $s);
-        $show{credits}{actor} = \@actors;
-       }
+        my $loop_date = $grabDate->year() . '-' . substr("0".$grabDate->month(),-2) . '-' . substr("0".$grabDate->day(),-2);
+        my $req = HTTP::Request->new(GET => "$url?time=$loop_date+" . 4*$count .".00");
+        $req->header('Accept' => 'text/html');
 
-       foreach my $directors ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Regisseur<\/th>} } ) )
-       {
-        my @directors = split(m/\s*,\s*/, (($directors->look_down('_tag', 'td'))->as_text()));
-        $show{credits}{director} = \@directors;
-       }
+        $tb->ignore_unknown(0); # otherwise, html5 tags like section are stripped out
+        $tb->parse(($ua->request($req))->content)
+            or die "cannot parse content of http://tv.search.ch/?time=$loop_date+" . 4*$count .".00";
+        $tb->eof;
 
-       foreach  ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Wiederholung<\/th>} } ) )
-       {
-        $show{'previously-shown'} = {}
-       }
- 
-       foreach my $writers ($div->look_down('_tag' => 'tr', sub { $_[0]->as_HTML() =~ m{<th>Drehbuch<\/th>} } ) )
-       {
-        my @writers = split(m/\s*,\s*/, (($writers->look_down('_tag', 'td'))->as_text()));
-        $show{credits}{writer} = \@writers;
-       }
-       $show{'title'} = [[$title, $lang]]; 
-       $show{'sub-title'} = [[$sub_title, $lang]] if(length($sub_title));
-       $show{desc} = [[ $description, $lang ]] if(length($description));
-      }
-     }
-     $writer->write_programme(\%show); 
+        parse_page($tb);
 
-    } 
-   }
-  }
-  $tb->delete();
-  update $bar if not $opt_quiet;
-
- }
- $grabDate = $grabDate->add ( days => 1 );
- if( DateTime->compare ( $grab_stop, $grabDate ) > 0) 
- {
-  goto grab_channel_loop;
- }
- $bar->finish()
-  unless($opt_quiet);
+        $tb->delete();
+        update $bar if not $opt_quiet;
+    }
+    $grabDate = $grabDate->add ( days => 1 );
+    if( DateTime->compare ( $grab_stop, $grabDate ) > 0) {
+        goto grab_channel_loop;
+    }
+    $bar->finish()
+    unless($opt_quiet);
 }
 
 
