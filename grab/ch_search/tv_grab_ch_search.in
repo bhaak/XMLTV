@@ -83,6 +83,7 @@ at http://sourceforge.net/projects/xmltv/.
 
 use warnings;
 use strict;
+use Encode;
 use DateTime;
 use LWP::Simple;
 use HTTP::Cookies;
@@ -495,10 +496,12 @@ sub parse_page {
                     $show{'previously-shown'} = {}
                 }
 
-                $tmp  = $tv_show->as_HTML();
-                if ($tmp =~ /Untertitel für Gehörlose/) {
+                # Untertitel für Gehörlose
+                foreach my $year ($tv_show->look_down('_tag' => 'img', 'title' => encode("utf-8", "Untertitel für Gehörlose"))) {
                     $show{subtitles} = [{ type => 'teletext' }];
                 }
+
+                $tmp  = $tv_show->as_HTML();
                 if ($tmp =~ /Zweikanalton/) {
                     $show{audio}{stereo} = 'bilingual';
                 }
