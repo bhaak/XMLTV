@@ -501,11 +501,13 @@ sub parse_page {
                     $show{subtitles} = [{ type => 'teletext' }];
                 }
 
-                $tmp  = $tv_show->as_HTML();
-                if ($tmp =~ /Zweikanalton/) {
+                # Zweikanalton
+                foreach my $year ($tv_show->look_down('_tag' => 'img', 'title' => 'Zweikanalton')) {
                     $show{audio}{stereo} = 'bilingual';
                 }
-                if ($tmp =~ /16:9/) {
+
+                # 16:9
+                foreach my $year ($tv_show->look_down('_tag' => 'img', 'title' => '16:9')) {
                     $show{video}{aspect} = '16:9';
                 }
 
