@@ -496,6 +496,11 @@ sub parse_page {
                     $show{'previously-shown'} = {}
                 }
 
+                # Episode
+                foreach my $episode ($tv_show->look_down('class' => 'tv-detail-episode tv-detail-short')) {
+                    $show{'episode-num'} = [[ $episode->right()->as_text(), 'onscreen' ]]
+                }
+
                 # Untertitel für Gehörlose
                 foreach my $deaf ($tv_show->look_down('_tag' => 'img', 'title' => encode("utf-8", "Untertitel für Gehörlose"))) {
                     $show{subtitles} = [{ type => 'teletext' }];
