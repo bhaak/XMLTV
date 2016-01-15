@@ -375,7 +375,7 @@ sub channel_id($) {
 }
 
 sub parse_page {
-    my ($tb) = @_;
+    my ($tb, $start_parse_date) = @_;
     foreach my $tv_channel ( $tb->look_down('class' => 'sl-card tv-index-channel') ) {
         my $channel_id = substr($tv_channel->attr('id'), 3); # tv-sf1 -> sf1
         if ( defined($channel_id) ) {
@@ -391,15 +391,17 @@ sub parse_page {
                 my $end_date = $params{'end'};
                 next unless defined($start_date);
 
-                $show{start} = DateTime->new (
+                my $show_start = DateTime->new (
                     year => substr($start_date, 0, 4)
                     ,month => substr($start_date, 5, 2)
                     ,day   => substr($start_date, 8, 2)
                     ,hour  => substr($start_date, 11, 2)
                     ,minute => substr($start_date, 14, 2)
                     ,second => substr($start_date, 17, 2)
-                    ,time_zone => 'Europe/Zurich'
-                )->strftime( "%Y%m%d%H%M%S %z" );
+                    ,time_zone => 'Europe/Zurich');
+                $show{start} = $show_start->strftime( "%Y%m%d%H%M%S %z" );
+                # skip shows starting before the start date to prevent duplicates
+                next if $show_start < $start_parse_date;
 
                 $show{stop} = DateTime->new (
                     year => substr($end_date, 0, 4)
@@ -532,7 +534,7 @@ sub grab_channels {
             or die "cannot parse content of http://tv.search.ch/?time=$loop_date+" . 4*$count .".00";
         $tb->eof;
 
-        parse_page($tb);
+        parse_page($tb, $grabDate->clone()->set_hour(4*$count));
 
         $tb->delete();
         update $bar if not $opt_quiet;
