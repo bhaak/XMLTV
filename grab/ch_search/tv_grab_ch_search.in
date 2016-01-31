@@ -24,19 +24,19 @@ tv_grab_ch_search --version
 =head1 DESCRIPTION
 
 Output TV listings for several channels available in Switzerland and
-(partly) central Europe. 
+(partly) central Europe.
 The data comes from tv.search.ch. The grabber relies on
 parsing HTML so it might stop working at any time.
 
-First run B<tv_grab_ch_search --configure> to choose, which channels 
-you want to download. Then running B<tv_grab_ch_search> with no 
+First run B<tv_grab_ch_search --configure> to choose, which channels
+you want to download. Then running B<tv_grab_ch_search> with no
 arguments will output listings in XML format to standard output.
 
 B<--configure> Ask for each available channel whether to download
 and write the configuration file.
 
 B<--config-file FILE> Set the name of the configuration file, the
-default is B<~/.xmltv/tv_grab_ch_search.conf>.  This is the file 
+default is B<~/.xmltv/tv_grab_ch_search.conf>.  This is the file
 written by B<--configure> and read when grabbing.
 
 B<--gui OPTION> Use this option to enable a graphical interface to be used.
@@ -138,7 +138,7 @@ sub get_page($);
 sub grab_channel($);
 
 ## attributes of xmltv root element
-my $head = { 
+my $head = {
     'source-data-url'      => 'http://tv.search.ch/channels',
     'source-info-url'      => 'http://tv.search.ch/',
     'generator-info-name'  => 'XMLTV',
@@ -177,7 +177,7 @@ GetOptions(
     'days=i'         => \$opt_days,
     'offset=i'       => \$opt_offset,
     'quiet'          => \$opt_quiet,
-    'slow'           => \$opt_slow,    
+    'slow'           => \$opt_slow,
     'list-channels'  => \$opt_list_channels,
     'help'           => \$opt_help,
 ) or usage(0);
@@ -197,8 +197,8 @@ my $grab_stop = DateTime->now()->add ( days => $opt_offset + $opt_days );
 
 
 my $mode = XMLTV::Mode::mode('grab', # default value
-    $opt_configure 	=> 'configure',
-    $opt_list_channels	=> 'list-channels',
+    $opt_configure => 'configure',
+    $opt_list_channels => 'list-channels',
 );
 
 
@@ -209,10 +209,10 @@ my @config_lines;
 
 if($mode eq 'configure') {
     XMLTV::Config_file::check_no_overwrite($config_file);
-} 
+}
 elsif($mode eq 'grab' || $mode eq 'list-channels') {
     @config_lines = XMLTV::Config_file::read_lines($config_file);
-} 
+}
 else { die("never heard of XMLTV mode $mode, sorry :-(") }
 
 
@@ -235,12 +235,11 @@ foreach(@config_lines) {
     next unless defined;
 
     if (/^channel:?\s+(\S+)/) {
-	warn("\nConfigured channel $1 not available anymore. \nPlease reconfigure tv_grab_ch_search.\n"),
-	  next unless(defined($channels{$1}));
-	push @requests, $1;
-    } 
-    else {
-	warn "$config_file:$line: bad line\n";
+        warn("\nConfigured channel $1 not available anymore. \nPlease reconfigure tv_grab_ch_search.\n"),
+          next unless(defined($channels{$1}));
+        push @requests, $1;
+    } else {
+        warn "$config_file:$line: bad line\n";
     }
 }
 
@@ -255,18 +254,18 @@ if ($mode eq 'configure') {
     my @want = ask_many_boolean(1, @qs);
 
     foreach (@chs) {
-	my $w = shift @want;
-	my $chname = shift @names;
-	
-	warn("cannot read input, stopping to ask questions ..."), last if not defined $w;
+        my $w = shift @want;
+        my $chname = shift @names;
 
-	print CONFIG '#' if not $w; #- comment line out if user answer 'no'
+        warn("cannot read input, stopping to ask questions ..."), last if not defined $w;
 
-	# shall we store the display name in the config file?
-	# leave it in, since it probably makes it a lot easier for the
-	# user to choose which channel to comment/uncommet - when manually
-	# viing the config file -- are there people who do that?
-	print CONFIG "channel $_ #$chname\n";
+        print CONFIG '#' if not $w; #- comment line out if user answer 'no'
+
+        # shall we store the display name in the config file?
+        # leave it in, since it probably makes it a lot easier for the
+        # user to choose which channel to comment/uncommet - when manually
+        # viing the config file -- are there people who do that?
+        print CONFIG "channel $_ #$chname\n";
     }
 
     close CONFIG or warn "unable to nicely close the config file: $!";
@@ -293,8 +292,8 @@ $writer_args{'encoding'} = 'utf-8';
 
 if( defined( $opt_days )) {
     $writer_args{offset} = $opt_offset;
-	$writer_args{days} = $opt_days;
-	$writer_args{cutoff} = "000000";
+    $writer_args{days} = $opt_days;
+    $writer_args{cutoff} = "000000";
 }
 
 ## create our writer object
@@ -305,8 +304,8 @@ $writer->start($head);
 
 if ($mode eq 'list-channels') {
     foreach (keys %channels) {
-        my %channel = ('id'           => channel_id($_), 
-                       'display-name' => [[$channels{$_}, $lang]]); 
+        my %channel = ('id'           => channel_id($_),
+                       'display-name' => [[$channels{$_}, $lang]]);
         $writer->write_channel(\%channel);
     }
 
@@ -326,8 +325,8 @@ die "No channels specified, run me with --configure flag\n" unless(scalar(@reque
 my $paramstr ="";
 foreach(@requests) {
     my $id = channel_id($_);
-    my %channel = ('id'           => $id, 
-                   'display-name' => [[$channels{$_}, $lang]]); 
+    my %channel = ('id'           => $id,
+                   'display-name' => [[$channels{$_}, $lang]]);
     $writer->write_channel(\%channel);
     $paramstr = $paramstr."&channels[]=".$_;
 
@@ -342,12 +341,12 @@ my $cur_month = DateTime->now()->month();
 
 my $url=$head->{q(source-data-url)};
 
-	
-my $ua = LWP::UserAgent->new(keep_alive => 300);	
+
+my $ua = LWP::UserAgent->new(keep_alive => 300);
 $ua->cookie_jar(HTTP::Cookies->new());
 $ua->agent("xmltv/$XMLTV::VERSION");
 $ua->env_proxy;
-	
+
 my $req = HTTP::Request->new(POST => $url);
 $req->content_type('application/x-www-form-urlencoded');
 $req->content(substr ( $paramstr, 1));
@@ -364,13 +363,8 @@ $writer->end();
 
 
 ## channel_id($s) :: turn site channel id into an xmltv id
-sub channel_id($) {  
+sub channel_id($) {
     my $s = shift;
-    #for (my $s = shift) {
-    #$_ = lc(defined($chid_mapping{$_}) ? $chid_mapping{$_} : "$_.search.ch");
-	#$_ = "C$_" if /^\d/;
-	#return $_;
-    #}
     $s =~ s|^tv_||;
     return "$s.search.ch"
 }
@@ -589,7 +583,7 @@ sub get_page($) {
     my $retry = 0;
 
     local $SIG{__DIE__} = sub { die "\n$url: $_[0]" };
-    
+
     while($retry < 2) {
         my $got = eval { get_nice($url . ($retry ? "&retry=$retry" : "")); };
         $retry ++;
