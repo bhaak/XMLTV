@@ -192,8 +192,10 @@ die "neither offset nor days may be negative"
 
 
 ## calculate global start/stop times ...
-my $grab_start = DateTime->now()->add( days => $opt_offset );
-my $grab_stop = DateTime->now()->add ( days => $opt_offset + $opt_days );
+my $grab_start = DateTime->now(time_zone => 'Europe/Zurich')->add( days => $opt_offset );
+#print "\n***** grab_start: $grab_start\n";
+my $grab_stop = DateTime->now(time_zone => 'Europe/Zurich')->add ( days => $opt_offset + $opt_days );
+#print "\n***** grab_stop: $grab_stop\n";
 
 
 my $mode = XMLTV::Mode::mode('grab', # default value
@@ -395,18 +397,19 @@ sub parse_page {
                     ,second => substr($start_date, 17, 2)
                     ,time_zone => 'Europe/Zurich');
                 $show{start} = $show_start->strftime( "%Y%m%d%H%M%S %z" );
-                # skip shows starting before the start date to prevent duplicates
-                next if $show_start < $start_parse_date;
 
-                $show{stop} = DateTime->new (
+                my $show_stop = DateTime->new (
                     year => substr($end_date, 0, 4)
                     ,month => substr($end_date, 5, 2)
                     ,day   => substr($end_date, 8, 2)
                     ,hour  => substr($end_date, 11, 2)
                     ,minute => substr($end_date, 14, 2)
                     ,second => substr($end_date, 17, 2)
-                    ,time_zone => 'Europe/Zurich'
-                )->strftime( "%Y%m%d%H%M%S %z" );
+                    ,time_zone => 'Europe/Zurich');
+				$show{stop} = $show_stop->strftime( "%Y%m%d%H%M%S %z" );
+				
+                # skip shows starting before the start date to prevent duplicates
+                next if $show_stop < $start_parse_date;
 
                 my $title_tag = $tv_show->look_down('_tag' => 'h2');
                 $title_tag->objectify_text();
@@ -416,6 +419,17 @@ sub parse_page {
                 my $sub_title = $tv_show->look_down('_tag' => 'h3');
                 $show{'sub-title'} = [[$sub_title->as_text(), $lang]] if($sub_title);
 
+                #if ($show_stop < $start_parse_date) {
+					#print "\n>>>>>> skip: $title - $show_start $show_stop\n";
+					#print "show_start: ". $show_start ." < start_parse_date: ". $start_parse_date ."\n";
+					#print "show_stop: ". $show_stop ." < start_parse_date: ". $start_parse_date ."\n\n";
+				#} else {
+					#print "\n*** grab: $title - $show_start $show_stop\n";
+					#print "show_start: ". $show_start ." < start_parse_date: ". $start_parse_date ."\n";
+					#print "show_stop: ". $show_stop ." < start_parse_date: ". $start_parse_date ."\n\n";
+				#}
+				
+				
                 # Note: The layout is using dl lists for displaying this data
                 # and only the dt tag is marked with meaningful classes. That's
                 # why $variable->right()-as_text() is employed here to get the
@@ -532,12 +546,12 @@ sub grab_channels {
         my $loop_date = $grabDate->year() . '-' . substr("0".$grabDate->month(),-2) . '-' . substr("0".$grabDate->day(),-2);
         my $req = HTTP::Request->new(GET => "$url?time=$loop_date+" . 4*$count .".00");
         $req->header('Accept' => 'text/html');
-
+		
         $tb->ignore_unknown(0); # otherwise, html5 tags like section are stripped out
         $tb->parse(($ua->request($req))->content)
             or die "cannot parse content of http://tv.search.ch/?time=$loop_date+" . 4*$count .".00";
         $tb->eof;
-
+		
         parse_page($tb, $grabDate->clone()->set_hour(4*$count));
 
         $tb->delete();
