@@ -312,8 +312,8 @@ sub process_table( $$$$ ) {
 	
 	my $basedateday = UnixDate(parse_date($basedate), '%e');
 	my $urlfmt = "http://www." . domain() .
-		"/pls/tv/".($COUNTRY eq 'hu' ? 'old' : '')."tv.channel?i_ch=$ch_port_id" .
-		"&i_date=%d&i_xday=".$days_to_request."&i_where=1";
+		"/pls/tv/".($COUNTRY eq 'hu' || $COUNTRY eq 'ro' ? 'old' : '')."tv.channel?i_ch=$ch_port_id" .
+		"&i_date=%d&i_xday=".$days_to_request."&i_where=1";    # bug #501
 	my $url = "$urlfmt";
 	my $currday = $baseday + $FETCHOFFSET - 1;
 	my ($tree, $body);
@@ -553,6 +553,19 @@ sub process_table( $$$$ ) {
 				foreach my $a ($col->look_down("_tag"=>"a")) {
 					push @urls,	$a->attr(q(href));
 				}
+
+				# support ticket #202 
+                # get the rating if available
+				#    <img alt="(15)" title="nevhodné do 15ti let" class="age_limit_icon" src="http://media.port-network.com/page_elements/15_age_mini_pix.png">
+				if (my $img = $span[0]->parent()->look_down('_tag' => 'img', 'class' => 'age_limit_icon')) {
+				    t "age limit icon found";
+				    my $rating = $img->attr('alt');
+				    $rating =~ s/[\(\)]//g;			# strip the brackets
+				    my $rating_icon = $img->attr('src');
+				    t "age rating = $rating";
+				    $program{rating} = [[ $rating, '', [{'src' => $rating_icon }] ]];
+				}
+
 			}
 		} # foreach $col
 
@@ -626,6 +639,8 @@ sub process_table( $$$$ ) {
 			if defined $program->{qw(episode-num)};
 		$prog->{length} = $program->{length} 
 			if defined $program->{length};
+		$prog->{rating} = $program->{rating} 
+			if defined $program->{rating};          # support #202
 
 		# Setting stop date for the previous programm
 		# Last program in the grabbed list has no stop attribute, sorry.
@@ -795,7 +810,7 @@ sub get_channels( ;$ ) {
 	my $d = domain();
 	my $bar = new XMLTV::ProgressBar('getting list of channels', 1)
 		if not $opt_quiet;
-	my $url="http://www.$d/pls/tv/".($COUNTRY eq 'hu' ? 'old' : '')."tv.prog";
+	my $url="http://www.$d/pls/tv/".($COUNTRY eq 'hu' || $COUNTRY eq 'ro' ? 'old' : '')."tv.prog";    # bug #501
 
 	worker("base-downloading");
 	t "fetching $url...";
@@ -1380,7 +1395,7 @@ sub grab_icon( $ ) {
 	if (!defined $image) {
 		# image url not valid, so we must get it from the programmes page. Ideally we would do that during the main grab but this is a Q&D fix
 		# and I don't want to change too much of this code
-		my $url = "http://www." . domain() . "/pls/w/".($COUNTRY eq 'hu' ? 'old' : '')."tv.channel?i_ch=".$channelid."&i_date=".UnixDate('today','%Y-%m-%d')."&i_where=1";
+		my $url = "http://www." . domain() . "/pls/w/".($COUNTRY eq 'hu' || $COUNTRY eq 'ro' ? 'old' : '')."tv.channel?i_ch=".$channelid."&i_date=".UnixDate('today','%Y-%m-%d')."&i_where=1";    # bug #501
 			
 		my $data=get_nice($url);
 		my $tree = HTML::TreeBuilder->new_from_content($data) or 
@@ -1470,8 +1485,8 @@ sub get_channel_urls( $ ) {
 
 	# two sprintf parameters: first: channel_id,, second how many days grabbed
 	my $churlfmt = "http://www." . domain() .
-		"/pls/tv/".($COUNTRY eq 'hu' ? 'old' : '')."tv.channel?i_ch=%d&" .
-		"i_days=1&i_xday=%d&i_where=1";
+		"/pls/tv/".($COUNTRY eq 'hu' || $COUNTRY eq 'ro' ? 'old' : '')."tv.channel?i_ch=%d&" .
+		"i_days=1&i_xday=%d&i_where=1";    # bug #501
 
     # url to grab now (4 days - this is the minimum)
 	my $churl = sprintf($churlfmt, $ch_did, 4);

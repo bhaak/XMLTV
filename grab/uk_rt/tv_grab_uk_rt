@@ -2,30 +2,30 @@
 
 use warnings;
 use strict;
-use XMLTV::ProgressBar;
-use XMLTV::Memoize; XMLTV::Memoize::check_argv('get_octets');
-use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
-use XMLTV::Options qw/ParseOptions/;
-use XMLTV::Configure::Writer;
+
 use XMLTV::Ask;
-use File::Path;
-use File::Basename;
-use LWP::UserAgent;
-use HTTP::Cache::Transparent;
-use Encode qw/decode encode/;
+use XMLTV::Configure::Writer;
+use XMLTV::Memoize; XMLTV::Memoize::check_argv('get_octets');
+use XMLTV::Options qw/ParseOptions/;
+use XMLTV::ProgressBar;
+use XMLTV::Supplement qw/GetSupplement SetSupplementRoot/;
+
 use DateTime;
 use DateTime::Duration;
 use DateTime::TimeZone;
+use Encode qw/decode encode/;
+use File::Basename;
+use File::Path;
 use HTML::Entities;
+use HTTP::Cache::Transparent;
 use IO::Scalar;  # used for configuration to write channels to string
+use LWP::UserAgent;
 use XML::LibXML; # used for lineups parsing/modification
 
 ##############################################
 #################### TODO ####################
 ##############################################
 
-# - wrap date/file tests in evals if there is a risk of failure
-#
 # - remove fixups from prog_titles_to_process that are now handled automatically
 #   e.g. duplicated title and/or episode in episode field
 #
@@ -247,6 +247,7 @@ my %hadC3AFC2BFC2BD;
 # to potentially use for such programmes
 my %uncategorised_progs;
 my %reality_progs;
+my %reality_progs_maybe_docs;
 my %categories;
 my %cats_per_prog;
 my %short_films;
@@ -278,9 +279,11 @@ my $prog_warnings = 0;
 # Output XMLTV library and grabber versions
 if (! $opt->{quiet}) {
     say("Program/library version information:\n");
-    say("XMLTV library version: $XMLTV::VERSION");
-    say("$grabber_name version: $grabber_version");
-    say("  libwww-perl version: $LWP::VERSION\n");
+    say("            XMLTV library version: $XMLTV::VERSION");
+    say("            $grabber_name version: $grabber_version");
+    say("              libwww-perl version: $LWP::VERSION");
+    say("         libdatetime-perl version: $DateTime::VERSION");
+    say("libdatetime-timezone-perl version: $DateTime::TimeZone::VERSION\n");
 }
 
 # Determine the modification time of the source data on the RT servers
@@ -319,6 +322,7 @@ if ($opt->{debug}) {
     print_categories();
     print_uncategorised_progs();
     print_reality_progs();
+    print_reality_progs_maybe_docs();
     print_cats_per_prog();
     print_short_films();
     print_possible_prog_numbering();
@@ -2722,7 +2726,8 @@ sub generate_cast_list {
     # The Radio Times data includes cast information in 2 formats:
     #
     # a) pairings of 'character*actor' with subsequent pairings
-    #    separated by '|' - '*' does not appear in any text
+    #    separated by '|' - the single '*' delimiter char should only appear
+    #    in text once but runs of '*' may additionally be seen
     # b) a comma separated list of actors with no character details
     #
     # If 'Director' appears in the character entry, this is to be used
@@ -2749,16 +2754,34 @@ sub generate_cast_list {
             # role debugging for non-actor role mapping
             my $seen_valid_roles = 0;
             my $seen_actor_roles = 0;
+            my $seen_actor_missing_roles = 0;
 
-            my @crew = ();
+            my @given_crew = (); # as given in the listings
+            my @valid_crew = (); # after mapping to valid XMLTV roles
             my @actors = ();
 
             # Now process the list of cast entries
             ENTRY:
             foreach my $entry (@castlist) {
 
-                # Check for bad cast entries
-                next ENTRY if ($entry !~ m/^[^*]+[*]/);
+                $entry =~ s/^\s+//;
+                $entry =~ s/\s+$//;
+
+                # Check for missing '*' separator in this entry
+                if ($entry !~ m/[*]/) {
+                    t("    Missing separator in credits (entry: $entry), skipping");
+                    next ENTRY;
+                }
+                # Don't allow a missing crew/actor name (e.g. "Director*")
+                if ($entry !~ m/[*][^*]+$/) {
+                    t("    Found empty credits name (entry: $entry), skipping");
+                    next ENTRY;
+                }
+                # Allow a missing crew role or character name (e.g. "*Patton Oswalt")
+                if ($entry !~ m/^[^*]+[*]/) {
+                    t("    Missing credits role (entry: $entry), treating as actor entry");
+                    $entry = "MISSING_ROLE" . $entry;
+                }
 
                 # Populate cast list against known production roles if possible,
                 # otherwise as character names for actors. We use a LUT to map
@@ -2770,7 +2793,7 @@ sub generate_cast_list {
                 # seen therefore before deciding whether to i) ignore unknown
                 # roles, or ii) assign them as acting roles
                 #
-                my ($given_role, $name) = split /\*/, $entry;
+                my ($given_role, $name) = $entry =~ m/^(\S.*[^*])\*([^*].*)$/;
 
                 # Replace any actor given as Himself/Herself with the
                 # character name given
@@ -2778,44 +2801,53 @@ sub generate_cast_list {
                     $given_role = $name;
                 }
 
-                $given_role = get_valid_xmltv_role($given_role);
+                my $valid_role = get_valid_xmltv_role($given_role);
 
-                if (grep {$given_role =~ /^$_$/i} @valid_roles) {
-                    t("    Found valid crew role: " . $given_role);
-                    push @crew, [ $given_role, $name ];
-                    # push @{$p->{credits}{$given_role}}, [$name];
+                if (grep {$valid_role =~ /^$_$/i} @valid_roles) {
+                    t("    Found valid crew role: " . $valid_role);
+                    push @given_crew, [ $given_role, $name ];
+                    push @valid_crew, [ $valid_role, $name ];
                     $seen_valid_roles++;
                 }
-                elsif ($seen_valid_roles >= 1 && $seen_actor_roles == 0) {
+                elsif ($given_role eq "MISSING_ROLE") {
+                    t("    Found possible actor entry without role: " . $name);
+                    push @actors, [ $given_role, $name ];
+                    $seen_actor_missing_roles++;
+                }
+                elsif ($seen_valid_roles >= 1 && $seen_actor_roles == 0 && $seen_actor_missing_roles == 0) {
                     # It's not a role that we currently handle, but we've
                     # seen other crew roles, so let's remember it
-                    # t("    Found possible crew role: " . $given_role);
-                    $seen_roles{$given_role}++;
+                    # t("    Found possible crew role: " . $valid_role);
+                    $seen_roles{$valid_role}++ if $given_role ne "MISSING_ROLE";
                 }
                 else {
-                    t("    Found possible actor role: " . $given_role . " - " . $name);
+                    t("    Found possible actor entry: " . $given_role . " - " . $name);
                     push @actors, [ $given_role, $name ];
-                    # push @{$p->{credits}{'actor'}}, [$name, $given_role];
                     $seen_actor_roles++;
                 }
             }
 
             # Prefer actors if we've seen 2 or fewer crew roles
-            if ($seen_actor_roles >= 1 && $seen_valid_roles <=2) {
-                foreach my $actor ((@actors, @crew)) {
-                    push @{$p->{credits}{'actor'}}, [encode($xml_encoding, $actor->[1]), encode($xml_encoding, $actor->[0])];
+            if (($seen_actor_roles + $seen_actor_missing_roles >= 1) && $seen_valid_roles <=2) {
+                foreach my $actor ((@actors, @given_crew)) {
+                    push @{$p->{credits}{'actor'}}, [encode($xml_encoding, $actor->[1]), ($actor->[0] eq "MISSING_ROLE" ? undef : encode($xml_encoding, $actor->[0]))];
                 }
             }
             # Otherwise, prefer crew roles
             else {
-                foreach my $actor (@crew) {
+                foreach my $actor (@valid_crew) {
                     push @{$p->{credits}{$actor->[0]}}, encode($xml_encoding, $actor->[1]);
                 }
             }
         }
         # Next we check for CSV-style actor entries
         elsif ($cast =~ tr/,//) {
+            ENTRY:
             foreach my $actor (split /,/, $cast) {
+                if ($actor !~ m/\S/) {
+                    t("    Found empty actor entry, skipping");
+                    next ENTRY;
+                }
                 push @{$p->{credits}{actor}}, [ encode($xml_encoding, $actor) ];
             }
         }
@@ -2841,6 +2873,8 @@ sub get_valid_xmltv_role {
 # 75 minutes for further analysis
 sub store_genre_debug_info {
     my $prog = shift;
+    my $r = \%reality_progs;
+    my $rd = \%reality_progs_maybe_docs;
 
     if ($opt->{debug}) {
         if (defined $prog->{'_genre'} && ! $prog->{'_film'}) {
@@ -2849,9 +2883,17 @@ sub store_genre_debug_info {
                     && $prog->{'_title'} !~ m/^(To Be Announced|TBA|Close)$/) {
                 $uncategorised_progs{$prog->{'_title'}} = $prog->{'_title'};
             }
-            # Track programmes categorised as reality, but ignore any that we have explicitly set
+            # Track programmes categorised as reality, but ignore any that we
+            # have explicitly set
             elsif ($prog->{'_genre'} =~ m/^Reality$/ && ! exists $replacement_cats{$prog->{'_title'}}) {
-                $reality_progs{$prog->{'_title'}} = $prog->{'_title'};
+                if ($prog->{'_desc'} =~ m/documentary/i) {
+                    $rd->{$prog->{'_title'}}->{'channel'}->{$prog->{'_rt_name'}} = $prog->{'_title'};
+                    $rd->{$prog->{'_title'}}->{'desc'} = substr($prog->{'_desc'}, 0, 67);
+                }
+                else {
+                    $r->{$prog->{'_title'}}->{'channel'}->{$prog->{'_rt_name'}} = $prog->{'_title'};
+                    $r->{$prog->{'_title'}}->{'desc'} = substr($prog->{'_desc'}, 0, 67);
+                }
             }
             $cats_per_prog{$prog->{'_title'}}{$prog->{'_genre'}}++;
         }
@@ -2910,39 +2952,95 @@ sub generate_start_stop_times {
     }
 
     # Determine start time with correct UTC offset
-    my $start_dt = DateTime->new(
-        year       => $yyyy,
-        month      => $mm,
-        day        => $dd,
-        hour       => $start_hr,
-        minute     => $start_mn,
-        second     => 0,
-        time_zone  => $tz,
-    );
+    my $start_dt;
+    eval {
+        $start_dt = DateTime->new(
+            year       => $yyyy,
+            month      => $mm,
+            day        => $dd,
+            hour       => $start_hr,
+            minute     => $start_mn,
+            second     => 0,
+            time_zone  => $tz,
+        );
+    };
+    if ($@) {
+        t("  A valid programme start time object could not be created for '"
+                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+        return undef;
+    }
 
-    $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
+    eval { $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset); };
+    if ($@) {
+        t("  A valid programme start time string could not be created for '"
+            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+        return undef;
+    }
     t("    " . $prog->{start} . " - Start time");
 
     # Determine stop time with correct UTC offset by adding duration of
     # programme to start time
-    my $dur = DateTime::Duration->new( minutes => $prog->{'_duration_mins'} );
-    my $stop_dt = $start_dt + $dur;
-    # Ensure correct timezone where TZ was explicitly flagged
-    $stop_dt = $stop_dt->set_time_zone('Europe/London') if (defined $prog->{'_explicit_tz'});
+    my $dur_dt = DateTime::Duration->new( minutes => $prog->{'_duration_mins'} );
 
-    $prog->{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
+    my $stop_dt;
+    eval { $stop_dt = $start_dt + $dur_dt; };
+    if ($@) {
+        t("  A valid programme stop time object could not be created for '"
+            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+        return undef;
+    }
+
+    # Ensure correct timezone for stop time where TZ was explicitly flagged
+    eval { $stop_dt = $stop_dt->set_time_zone('Europe/London') if (defined $prog->{'_explicit_tz'}); };
+    if ($@) {
+        t("  An explicit timezone could not be created for '"
+            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+        return undef;
+    }
+
+    eval { $prog->{stop}  = "" . $stop_dt->ymd('') . $stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset); };
+    if ($@) {
+        t("  A valid programme stop time string could not be created for '"
+            .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+        return undef;
+    }
+
+    t("    " . $prog->{start} . " - Start time");
     t("    " . $prog->{stop}  . " - Stop time");
 
     # Now we have determined the correct start/stop times for the programme
     # add any required timeshift defined in channel_ids and preserve the
     # correct timezone information
     #
+    #FIXME factor out checking of datetime object manipulation - undef+next if return is defined
     if (defined $channel_offset{ $prog->{channel} }) {
-        $start_dt = $start_dt + $ts_dt;
-        $stop_dt  = $stop_dt + $ts_dt;
+        eval { $start_dt = $start_dt + $ts_dt; };
+        if ($@) {
+            t("  A valid timeshifted programme start time object could not be created for '"
+                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            return undef;
+        }
 
-        $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset);
-        $prog->{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset);
+        eval { $stop_dt  = $stop_dt + $ts_dt; };
+        if ($@) {
+            t("  A valid timeshifted programme stop time object could not be created for '"
+                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            return undef;
+        }
+
+        eval { $prog->{start} = "" . $start_dt->ymd('') . $start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($start_dt->offset); };
+        if ($@) {
+            t("  A valid timeshifted programme start time string could not be created for '"
+                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            return undef;
+        }
+
+        eval { $prog->{stop}  = "" . $stop_dt->ymd('')  . $stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($stop_dt->offset); };
+        if ($@) {
+            t("  A valid timeshifted programme stop time string could not be created for '"
+                .  $prog->{'_title'} . "' ($yyyy$mm$dd $start_hr$start_mn), skipping programme");
+            return undef;
+        }
 
         t("    " . $prog->{start} . " - Start time after applying '" . $channel_offset{ $prog->{channel} } . "' timeshift");
         t("    " . $prog->{stop}  . " - Stop time after applying '"  . $channel_offset{ $prog->{channel} } . "' timeshift");
@@ -2961,42 +3059,88 @@ sub generate_start_stop_times {
         $broadcast_hours{ $prog->{channel} } =~ m/(\d\d)(\d\d)-(\d\d)(\d\d)/;
         my ($chan_start_hr, $chan_start_mn, $chan_stop_hr, $chan_stop_mn) = ($1, $2, $3, $4);
 
-        my $chan_start_dt = DateTime->new(
-            year       => $yyyy,
-            month      => $mm,
-            day        => $dd,
-            hour       => $chan_start_hr,
-            minute     => $chan_start_mn,
-            second     => 0,
-            time_zone  => 'Europe/London',
-        );
+        my $chan_start_dt;
+        eval {
+            $chan_start_dt = DateTime->new(
+                year       => $yyyy,
+                month      => $mm,
+                day        => $dd,
+                hour       => $chan_start_hr,
+                minute     => $chan_start_mn,
+                second     => 0,
+                time_zone  => 'Europe/London',
+            );
+        };
+        if ($@) {
+            t("  A valid channel start time object could not be created for '"
+                .  $prog->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
 
-        my $chan_stop_dt = DateTime->new(
-            year       => $yyyy,
-            month      => $mm,
-            day        => $dd,
-            hour       => $chan_stop_hr,
-            minute     => $chan_stop_mn,
-            second     => 0,
-            time_zone  => 'Europe/London',
-        );
+        my $chan_stop_dt;
+        eval {
+            $chan_stop_dt = DateTime->new(
+                year       => $yyyy,
+                month      => $mm,
+                day        => $dd,
+                hour       => $chan_stop_hr,
+                minute     => $chan_stop_mn,
+                second     => 0,
+                time_zone  => 'Europe/London',
+            );
+        };
+        if ($@) {
+            t("  A valid channel stop time object could not be created for '"
+                .  $prog->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
 
         # Shift channel start/stop times forward by whole days if necessary.
         if (defined $channel_offset{ $prog->{channel} } and $ts_dt->in_units( 'hours' ) % 24 == 0) {
-            $chan_start_dt = $chan_start_dt + $ts_dt;
-            $chan_stop_dt  = $chan_stop_dt  + $ts_dt;
+            eval { $chan_start_dt = $chan_start_dt + $ts_dt; };
+            if ($@) {
+                t("  A valid day-shifted channel start time object could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
+
+            eval { $chan_stop_dt  = $chan_stop_dt  + $ts_dt; };
+            if ($@) {
+                t("  A valid day-shifted channel stop time object could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
+
             t("    Applying channel timeshift of " . $ts_dt->in_units( 'hours' ) . " hours");
         }
 
         # Correct the stop time if it is earlier than the start time
         my $chan_stops_next_day = 0;
         if ($chan_start_dt >= $chan_stop_dt) {
-            $chan_stop_dt = $chan_stop_dt + $day_dur;
+            eval { $chan_stop_dt = $chan_stop_dt + $day_dur; };
+            if ($@) {
+                t("  A valid corrected channel stop time object could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
             $chan_stops_next_day = 1;
         }
 
-        my $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
-        my $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
+        my $chan_start;
+        eval { $chan_start  = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset); };
+        if ($@) {
+            t("  A valid channel start time string could not be created for '"
+                .  $prog->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
+
+        my $chan_stop;
+        eval { $chan_stop  = "" . $chan_stop_dt->ymd('') . $chan_stop_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset); };
+        if ($@) {
+            t("  A valid channel stop time string could not be created for '"
+                .  $prog->{'_rt_name'} . "', skipping programme");
+            return undef;
+        }
 
         t("    " . $chan_start . " - Start time of channel (normal)");
         t("    " . $chan_stop  . " - Stop time of channel (normal)");
@@ -3006,6 +3150,7 @@ sub generate_start_stop_times {
         if ($start_dt >= $chan_start_dt && $start_dt < $chan_stop_dt) {
             t("    '" . $prog->{'_title'} . "' shown whilst channel is on-air, adding");
         }
+
         # If the channel starts and stops broadcasting on the same
         # calendar day and the programme's start time is outside the
         # broadcast window, skip it
@@ -3034,11 +3179,35 @@ sub generate_start_stop_times {
             # at 201201010030 and 201201010100. These times occur whilst the
             # channel is on-air the _previous_ day.
             #
-            $chan_start_dt = $chan_start_dt - $day_dur;
-            $chan_stop_dt  = $chan_stop_dt - $day_dur;
+            eval { $chan_start_dt = $chan_start_dt - $day_dur; };
+            if ($@) {
+                t("  A valid channel start time object (prev day) could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
 
-            my $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset);
-            my $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset);
+            eval { $chan_stop_dt  = $chan_stop_dt - $day_dur; };
+            if ($@) {
+                t("  A valid channel stop time object (prev day) could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
+
+            my $chan_start;
+            eval { $chan_start = "" . $chan_start_dt->ymd('') . $chan_start_dt->hms('') . ' ' . DateTime::TimeZone->offset_as_string($chan_start_dt->offset); };
+            if ($@) {
+                t("  A valid channel start time string (prev day) could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
+
+            my $chan_stop;
+            eval { $chan_stop  = "" . $chan_stop_dt->ymd('')  . $chan_stop_dt->hms('')  . ' ' . DateTime::TimeZone->offset_as_string($chan_stop_dt->offset); };
+            if ($@) {
+                t("  A valid channel stop time string (prev day) could not be created for '"
+                    .  $prog->{'_rt_name'} . "', skipping programme");
+                return undef;
+            }
 
             t("    " . $chan_start . " - Start time of channel (previous day)");
             t("    " . $chan_stop  . " - Stop time of channel (previous day)");
@@ -5383,11 +5552,43 @@ sub print_uncategorised_progs {
 
 sub print_reality_progs {
     if (%reality_progs && scalar keys %reality_progs > 0) {
+        my @fixups;
         say("\nStart of list of Reality programmes");
         foreach my $title (sort keys %reality_progs) {
+            next if exists $reality_progs_maybe_docs{$title};
+ 
             say("  $title");
+            say("    desc: " . $reality_progs{$title}->{'desc'});
+            say("    chan: " . join(", ", sort keys %{$reality_progs{$title}->{'channel'}}));
+            push @fixups, "6|" . $title . "~Reality";
+        }
+
+        if (@fixups) {
+            say("\nPossible fixups for reality programmes:\n");
+            say($_) foreach sort @fixups;
+            say("");
         }
         say("End of list of Reality programmes");
+    }
+}
+
+sub print_reality_progs_maybe_docs {
+    if (%reality_progs_maybe_docs && scalar keys %reality_progs_maybe_docs > 0) {
+        my @fixups;
+        say("\nStart of list of Reality/Documentary programmes");
+        foreach my $title (sort keys %reality_progs_maybe_docs) {
+            say("  $title");
+            say("    desc: " . $reality_progs_maybe_docs{$title}->{'desc'});
+            say("    chan: " . join(", ", sort keys %{$reality_progs_maybe_docs{$title}->{'channel'}}));
+            push @fixups, "6|" . $title . "~Documentary";
+        }
+
+        if (@fixups) {
+            say("\nPossible fixups for (reality) documentary programmes:\n");
+            say($_) foreach sort @fixups;
+            say("");
+        }
+        say("End of list of Reality/Documentary programmes");
     }
 }
 
